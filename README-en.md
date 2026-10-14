@@ -23,11 +23,11 @@ breakdown, and streak stats. Every number is computed from your local `state.db`
 
 ## Why
 
-Hermes records every API call into a local SQLite file, yet nothing shows it to you:
-after four months, which model burned your tokens, which week hit hardest, how long
-your streak runs — all guesswork. This plugin lays that ledger open as a permanent
-sidebar dashboard, with every metric definition published below so each number can
-be re-verified with plain SQLite.
+Hermes already ships a usage page — the ledger is not invisible. This plugin exists
+for a humbler reason: the author thinks the GitHub-contributions heatmap is gorgeous
+and wanted one living in the sidebar, over the very same `state.db`. Along the way the
+metric definitions got written down and published below, so every number can be
+re-verified with plain SQLite.
 
 ## Features
 
