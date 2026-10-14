@@ -100,6 +100,11 @@ def days(
         "clock: -new Date().getTimezoneOffset()/60",
     ),
     weeks: int = Query(WEEKS_DEFAULT, ge=1, le=104),
+    year: Optional[int] = Query(
+        None, ge=2000, le=2100,
+        description="Calendar year (viewer timezone) to return IN FULL — "
+        "overrides the rolling `weeks` window. Used by the year browser.",
+    ),
 ) -> dict[str, Any]:
     """Per-day token totals + sessions + calls, bucketed in the viewer's tz.
 
@@ -188,11 +193,16 @@ def days(
     sessions_total, longest_secs = int(sess[0] or 0), float(sess[1] or 0)
 
     horizon = today - timedelta(weeks=weeks + 1)
-    window = [d for d in days_out if date.fromisoformat(d["date"]) >= horizon]
+    if isinstance(year, int):
+        prefix = f"{year}-"  # iso dates are zero-padded; prefix match is exact
+        window = [d for d in days_out if d["date"].startswith(prefix)]
+    else:
+        window = [d for d in days_out if date.fromisoformat(d["date"]) >= horizon]
 
     return {
         "generated_at": now.isoformat(timespec="seconds"),
         "tz_offset_hours": tz,
+        "year": year if isinstance(year, int) else None,
         "totals": {
             "tokens": total,
             "calls": calls_total,
@@ -204,6 +214,32 @@ def days(
             "best_streak_days": best,
         },
         "days": window,
+    }
+
+
+@router.get("/years")
+def years(tz: float = Query(..., description="Viewer timezone offset, hours east of UTC")) -> dict[str, Any]:
+    """Calendar years that have any billed activity, newest first, with the
+    per-year token sum — the year navigator's fuel."""
+    if not (-12 <= tz <= 14):
+        raise HTTPException(400, "tz must be within UTC-12..UTC+14")
+    tzinfo = timezone(timedelta(hours=tz))
+    rows = _query(
+        """
+        SELECT first_seen,
+               input_tokens + output_tokens + cache_read_tokens + cache_write_tokens
+        FROM session_model_usage WHERE first_seen IS NOT NULL
+        """
+    )
+    per_year: dict[int, int] = defaultdict(int)
+    for first_seen, tok in rows:
+        per_year[datetime.fromtimestamp(first_seen, tzinfo).year] += int(tok or 0)
+    active = sorted((y for y, t in per_year.items() if t > 0), reverse=True)
+    return {
+        "years": [
+            {"year": y, "tokens": per_year[y], "past": y < datetime.now(tzinfo).year}
+            for y in active
+        ]
     }
 
 

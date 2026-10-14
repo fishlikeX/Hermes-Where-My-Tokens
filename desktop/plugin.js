@@ -73,6 +73,10 @@ const BUNDLES = {
     refreshed: 'refreshed',
     refresh: 'refresh',
     maxWidthHint: 'max width (px) · 0 = fill',
+    maxWidthLabel: 'width',
+    recent: 'recent',
+    prevYear: 'previous year',
+    nextYear: 'next year',
     less: 'less',
     more: 'more',
     empty: 'no activity in range',
@@ -99,6 +103,10 @@ const BUNDLES = {
     refreshed: '更新于',
     refresh: '刷新',
     maxWidthHint: '最大宽度(px) · 0=铺满',
+    maxWidthLabel: '宽度',
+    recent: '最近',
+    prevYear: '上一年',
+    nextYear: '下一年',
     less: '少',
     more: '多',
     empty: '区间内无活动',
@@ -132,7 +140,7 @@ const Card = ({ value, label }) =>
     h('div', { style: { fontSize: 21, fontWeight: 700, color: 'var(--ui-accent)' } }, value),
     h('div', { style: { fontSize: 11.5, color: 'var(--ui-text-quaternary)', marginTop: 3 } }, label))
 
-const Panel = ({ title, zh, children }) => {
+const Panel = ({ title, zh, extra, children }) => {
   // ONE child via h() arrives as a bare ReactElement (non-iterable) — the
   // exact source of "Spread syntax requires ...iterable" page crashes here.
   const kids = children == null ? [] : Array.isArray(children) ? children : [children]
@@ -143,12 +151,47 @@ const Panel = ({ title, zh, children }) => {
     },
   },
     h(Overlay, { pct: 3 }),
-    h('div', { style: { fontSize: 13, fontWeight: 600, color: 'var(--ui-text-secondary)', marginBottom: 12 } }, title),
+    h('div', { style: { display: 'flex', alignItems: 'center', fontSize: 13, fontWeight: 600, color: 'var(--ui-text-secondary)', marginBottom: 12 } },
+      title, extra ? extra() : null),
     ...kids)
 }
 
-function Heatmap({ days, weeks, tr }) {
-  // Grid of calendar columns (Sun-aligned), cells = weekday rows. Cells
+// Month axis for the heatmap: label = the month of the FIRST day in a column;
+// that month is anchored at column floor((day-1)/7) of the window, so labels
+// strictly increase left→right (proof: within a month the column index grows
+// by exactly 1 per week). First-month labels are suppressed unless the month
+// starts inside the window (that is what "January has data" means).
+function monthLabels(start, end) {
+  const out = {}
+  const day = new Date(start)
+  while (day <= end) {
+    const col = Math.floor((day - start) / (7 * 86400000))
+    const m = day.getMonth()
+    if (!(m in out)) out[m] = col
+    day.setDate(day.getDate() + 1)
+  }
+  const anchor = Math.floor((new Date(start.getFullYear(), start.getMonth() + 1, 1) - start) / (7 * 86400000))
+  const months = Object.entries(out).map(([m, col]) => ({ m: Number(m), col: m === start.getMonth() ? Math.max(col, anchor) : col }))
+  const uniq = []
+  for (const item of months) {
+    const prev = uniq[uniq.length - 1]
+    if (prev && item.m === prev.m) { prev.col = Math.min(prev.col, item.col); continue }
+    if (prev && item.col < prev.col) item.col = prev.col // never walk backwards
+    uniq.push(item)
+  }
+  const spans = Math.max(1, Math.round((end - start) / (7 * 86400000)) + 1)
+  let i = 0
+  for (const item of uniq) {
+    while (i < item.col) { out[i++] = '' }
+    if (i < spans) out[i++] = item.m + 1
+  }
+  const arr = []
+  for (let c = 0; c < spans; c++) arr.push(out[c] || '')
+  return arr
+}
+
+function Heatmap({ days, weeks, year, tr }) {
+  // Grid of calendar columns (Mon-aligned), cells = weekday rows. Cells
   // stretch to the container (GitHub-style square stretch).
   //
   // Bucketing = quantiles over ACTIVE days only (GitHub's own quintile
@@ -164,16 +207,31 @@ function Heatmap({ days, weeks, tr }) {
   const levelOf = (v) => { let n = 0; while (n < 4 && v >= cuts[n]) n++; return n }
   const today = new Date()
   const dayIdx = (today.getDay() + 6) % 7 // Mon=0
-  const start = new Date(today)
-  start.setDate(start.getDate() - dayIdx - 7 * (weeks - 1))
+  let start, end, nWeeks
+  if (year) {
+    start = new Date(year, 0, 1)
+    while ((start.getDay() + 6) % 7 !== 0) start.setDate(start.getDate() - 1)
+    end = new Date(Math.min(today.getTime(), new Date(year, 11, 31).getTime()))
+    while ((end.getDay() + 6) % 7 !== 6 && end > start) end.setDate(end.getDate() + 1)
+    nWeeks = Math.round((end - start) / (7 * 86400000) + 0.001)
+  } else {
+    start = new Date(today)
+    start.setDate(start.getDate() - dayIdx - 7 * (weeks - 1))
+    end = new Date(Math.min(today.getTime(), start.getTime() + 7 * (weeks - 1) * 86400000 + 6 * 86400000))
+    nWeeks = weeks
+  }
+  const labels = monthLabels(start, end)
   const cols = []
-  for (let w = 0; w < weeks; w++) {
+  for (let w = 0; w < nWeeks; w++) {
     const cells = []
     for (let wd = 0; wd < 7; wd++) {
       const dt = new Date(start)
       dt.setDate(start.getDate() + w * 7 + wd)
-      if (dt > today) break
       const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
+      if (dt > today || (year && dt.getFullYear() !== year)) {
+        cells.push(h('div', { key: wd, style: { borderRadius: 3, aspectRatio: '1 / 1', minHeight: 8, visibility: 'hidden' } }))
+        continue
+      }
       const v = byDate[key] || 0
       const lvl = levelOf(v)
       const cellStyle = lvl === 0
@@ -189,6 +247,13 @@ function Heatmap({ days, weeks, tr }) {
       style: { display: 'flex', flexDirection: 'column', gap: '0.4vmin', flex: '1 1 0', minWidth: 0 },
     }, ...cells))
   }
+  const axis = h('div', {
+    style: { display: 'flex', gap: '0.4vmin', marginTop: 5, fontSize: 9.5,
+      color: 'var(--ui-text-quaternary)', userSelect: 'none' },
+  },
+    ...labels.map((lb, i) => h('div', {
+      key: i, style: { flex: '1 1 0', minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap' },
+    }, lb)))
   const legend = h('div', {
     style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 10,
       fontSize: 11, color: 'var(--ui-text-quaternary)' },
@@ -201,21 +266,28 @@ function Heatmap({ days, weeks, tr }) {
     tr('more'))
   return h('div', null,
     h('div', { style: { display: 'flex', gap: '0.4vmin', width: '100%' } }, ...cols),
-    legend)
+    axis, legend)
 }
 
 function Trend({ days, zh }) {
   const last = days.slice(-30)
   if (!last.length) return h('div', { style: { color: 'var(--ui-text-quaternary)', fontSize: 12 } }, '—')
   const mx = Math.max(...last.map((d) => d.tokens), 1)
-  return h('div', { style: { display: 'flex', alignItems: 'flex-end', gap: 3, height: 110 } },
-    ...last.map((d) => h('div', {
-      key: d.date, title: `${d.date} · ${fmtTok(d.tokens, zh)}`,
-      style: Object.assign(
-        { flex: 1, borderRadius: '2px 2px 0 0', minHeight: 2,
-          height: `${Math.max(2, (d.tokens / mx) * 100)}%` },
-        tint(62)),
-    })))
+  const md = (iso) => { const p = iso.split('-'); return `${Number(p[1])}/${Number(p[2])}` }
+  return h('div', null,
+    h('div', { style: { display: 'flex', alignItems: 'flex-end', gap: 3, height: 110 } },
+      ...last.map((d) => h('div', {
+        key: d.date, title: `${d.date} · ${fmtTok(d.tokens, zh)}`,
+        style: Object.assign(
+          { flex: 1, borderRadius: '2px 2px 0 0', minHeight: 2,
+            height: `${Math.max(2, (d.tokens / mx) * 100)}%` },
+          tint(62)),
+      }))),
+    // Hermes usage-page style: only the ends of the axis carry dates
+    h('div', {
+      style: { display: 'flex', justifyContent: 'space-between', marginTop: 5,
+        fontSize: 10, color: 'var(--ui-text-quaternary)', userSelect: 'none' },
+    }, md(last[0].date), md(last[last.length - 1].date)))
 }
 
 function ModelBars({ models, zh }) {
@@ -245,6 +317,10 @@ function Page({ ctx, tr, zh }) {
   const [data, setData] = useState(null)
   const [err, setErr] = useState(null)
   const [busy, setBusy] = useState(false)
+  // Year browser: null = rolling recent window; a number = that calendar year.
+  // `years` (with activity) comes from /years on first load.
+  const [year, setYear] = useState(null)
+  const [years, setYears] = useState(null)
   // Owner-tunable page width. ctx.storage may be absent on older desktop
   // shells (same lesson as ctx.i18n — one missing API must never blank the
   // page), so every access goes through this capability-checked pair; without
@@ -265,11 +341,14 @@ function Page({ ctx, tr, zh }) {
     setBusy(true)
     try {
       const tz = -new Date().getTimezoneOffset() / 60
-      const [days, models] = await Promise.all([
-        ctx.rest(`/days?tz=${tz}&weeks=26`),
+      const urls = [
+        ctx.rest(`/days?tz=${tz}&weeks=26${year ? `&year=${year}` : ''}`),
         ctx.rest('/models?limit=5'),
-      ])
+      ]
+      if (!years) urls.push(ctx.rest(`/years?tz=${tz}`))
+      const [days, models, yearsRes] = await Promise.all(urls)
       setData({ ...days, models: models.models })
+      if (yearsRes) setYears(yearsRes.years || [])
       setErr(null)
     } catch (e) {
       const msg = String((e && (e.message || e.detail)) || e)
@@ -277,9 +356,56 @@ function Page({ ctx, tr, zh }) {
     } finally {
       setBusy(false)
     }
-  }, [ctx, tr])
+  }, [ctx, tr, year, years])
 
   useEffect(() => { load() }, [load])
+
+  // Year navigator lives in the heatmap panel title, GitHub-style: a year
+  // label flanked by ‹ › that only walks across years that have activity.
+  const yearRow = () => {
+    const opts = (years || []).map((y) => y.year)
+    const cur = year || 'recent'
+    if (opts.length < 2) {
+      // single-year ledger: still show the year label (top-right), clickable
+      // to pull that full calendar year; no arrows to walk to.
+      return h('span', {
+        title: tr('recent'),
+        onClick: () => setYear(null),
+        style: { marginLeft: 'auto', fontSize: 12, fontWeight: 600,
+          color: 'var(--ui-text-secondary)', cursor: 'pointer' },
+      }, cur === 'recent' ? String(new Date().getFullYear()) : String(cur))
+    }
+    // nav list: [null(=recent), newest … oldest]; ‹ = one to the NEWER side,
+    // › = one to the OLDER side (list is newest-first, so dir maps straight
+    // to the index shift).
+    const nav = [null].concat(opts)
+    const step = (dir) => {
+      const i = nav.indexOf(year)
+      const next = nav[Math.max(0, Math.min(nav.length - 1, i + dir))]
+      setYear(next === null ? null : Number(next))
+    }
+    const arrow = (dir, glyph, label, disabled) =>
+      h('span', {
+        title: label,
+        onClick: disabled ? undefined : () => step(dir),
+        style: {
+          cursor: disabled ? 'default' : 'pointer', padding: '0 6px',
+          color: disabled ? 'var(--ui-text-quaternary)' : 'var(--ui-accent)',
+          opacity: disabled ? 0.35 : 1, userSelect: 'none', fontSize: 13,
+        },
+      }, glyph)
+    const atNewest = year === null || year === undefined
+    const atOldest = opts.length && year === opts[opts.length - 1]
+    return h('span', {
+      style: { marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 2, fontSize: 12 },
+    },
+      arrow(-1, '‹', tr('prevYear'), atNewest),
+      h('span', {
+        onClick: () => setYear(null),
+        style: { cursor: 'pointer', color: 'var(--ui-text-secondary)', minWidth: 46, textAlign: 'center', fontWeight: 600 },
+      }, cur === 'recent' ? tr('recent') : String(cur)),
+      arrow(1, '›', tr('nextYear'), atOldest))
+  }
 
   if (err && !data) {
     return h('div', { style: { padding: '26px 30px', maxWidth: 860 } },
@@ -306,12 +432,14 @@ function Page({ ctx, tr, zh }) {
           border: '1px solid var(--ui-stroke-secondary)', borderRadius: 6, padding: '3px 10px',
         },
       }, tr('refresh')),
+      h('span', { style: { fontSize: 11, color: 'var(--ui-text-quaternary)' } }, tr('maxWidthLabel')),
       h('input', {
         type: 'number', min: 0, max: 4000, step: 20, value: maxw,
         title: tr('maxWidthHint'),
         onChange: (e) => saveMaxw(Number(e.target.value)),
         style: {
-          width: 92, fontSize: 11.5, padding: '3px 8px', borderRadius: 6,
+          width: 64, fontSize: 11.5, padding: '3px 8px', borderRadius: 6,
+          marginLeft: 6,
           border: '1px solid var(--ui-stroke-secondary)',
           background: 'transparent', color: 'var(--ui-text-secondary)', outline: 'none',
         },
@@ -336,7 +464,8 @@ function Page({ ctx, tr, zh }) {
       h(Card, { value: `${fmtTok(t.peak_day_tokens, zh)}`, label: `${tr('peak')} ${t.peak_day || ''}` }),
       h(Card, { value: `${t.longest_session_hours} ${tr('hrs')}`, label: tr('longest') })),
 
-    h(Panel, { title: tr('heatmapTitle'), zh }, h(Heatmap, { days: data.days, weeks: 26, tr })),
+    h(Panel, { title: tr('heatmapTitle'), zh, extra: yearRow },
+      h(Heatmap, { days: data.days, weeks: 26, year: data.year || year, tr })),
     h(Panel, { title: tr('trendTitle'), zh }, h(Trend, { days: data.days, zh })),
     h(Panel, { title: tr('modelsTitle'), zh }, h(ModelBars, { models: data.models, zh })))
 }
