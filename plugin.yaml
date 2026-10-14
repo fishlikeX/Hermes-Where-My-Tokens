@@ -1,0 +1,10 @@
+name: where-my-tokens
+version: 0.1.0
+description: >-
+  Where My Tokens? / 我的词元去哪了？ — zcode-style token analytics for your
+  own Hermes: activity heatmap, daily trend, per-model breakdown, streaks.
+  Reads the local state.db read-only. All dates render in the machine's
+  system timezone — no hardcoded offsets.
+author: fishlikeX
+license: MIT
+platforms: [windows, linux, macos]
