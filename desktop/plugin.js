@@ -158,39 +158,26 @@ const Panel = ({ title, zh, extra, children }) => {
     ...kids)
 }
 
-// Month axis for the heatmap: label = the month of the FIRST day in a column;
-// that month is anchored at column floor((day-1)/7) of the window, so labels
-// strictly increase left→right (proof: within a month the column index grows
-// by exactly 1 per week). First-month labels are suppressed unless the month
-// starts inside the window (that is what "January has data" means).
+// GitHub semantics, exactly: a week-column gets a month label only when the
+// calendar month's 1st falls INSIDE that week. 1st-days strictly increase,
+// so labels are strictly monotone by construction — and each label is keyed
+// by (year, month), so a year-spanning window can show two real Decembers
+// (month-number keys once smeared 2025-12 across a跨年窗; caught by the
+// test matrix, 2026-10-15). Windows starting mid-month simply show no label
+// until the next 1st — GitHub's own behavior on rolling windows.
 // Labels are locale-shaped by the caller: 中文 "10月" / GitHub-style "Oct".
 const MONTHS_EN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
 function monthLabels(start, end, fmtMonth) {
-  const out = {}
+  const spans = Math.max(1, Math.round((end - start) / (7 * 86400000)) + 1)
+  const arr = new Array(spans).fill('')
   const day = new Date(start)
   while (day <= end) {
-    const col = Math.floor((day - start) / (7 * 86400000))
-    const m = day.getMonth()
-    if (!(m in out)) out[m] = col
+    if (day.getDate() === 1) {
+      const col = Math.floor((day - start) / (7 * 86400000))
+      if (col >= 0 && col < spans && !arr[col]) arr[col] = fmtMonth(day.getMonth())
+    }
     day.setDate(day.getDate() + 1)
   }
-  const anchor = Math.floor((new Date(start.getFullYear(), start.getMonth() + 1, 1) - start) / (7 * 86400000))
-  const months = Object.entries(out).map(([m, col]) => ({ m: Number(m), col: m === start.getMonth() ? Math.max(col, anchor) : col }))
-  const uniq = []
-  for (const item of months) {
-    const prev = uniq[uniq.length - 1]
-    if (prev && item.m === prev.m) { prev.col = Math.min(prev.col, item.col); continue }
-    if (prev && item.col < prev.col) item.col = prev.col // never walk backwards
-    uniq.push(item)
-  }
-  const spans = Math.max(1, Math.round((end - start) / (7 * 86400000)) + 1)
-  let i = 0
-  for (const item of uniq) {
-    while (i < item.col) { out[i++] = '' }
-    if (i < spans) out[i++] = fmtMonth(item.m)
-  }
-  const arr = []
-  for (let c = 0; c < spans; c++) arr.push(out[c] || '')
   return arr
 }
 function Heatmap({ days, weeks, year, zh, tr }) {
@@ -223,7 +210,20 @@ function Heatmap({ days, weeks, year, zh, tr }) {
     end = new Date(Math.min(today.getTime(), start.getTime() + 7 * (weeks - 1) * 86400000 + 6 * 86400000))
     nWeeks = weeks
   }
-  const labels = monthLabels(start, end, zh ? (m) => (m + 1) + '月' : (m) => MONTHS_EN[m])
+  let labels = monthLabels(start, end, zh ? (m) => (m + 1) + '月' : (m) => MONTHS_EN[m])
+  if (year) {
+    // year view pads the grid with Monday-aligned weeks outside the calendar
+    // year. A week keeps its label if ANY of its 7 days falls in the year
+    // (GitHub draws "Jan" on the Dec29-Jan4 week — clearing by week-start
+    // would eat that January); fully-outside padding columns go blank.
+    const yStart = new Date(year, 0, 1).getTime()
+    const yEnd = new Date(year, 11, 31).getTime()
+    labels = labels.map((lb, i) => {
+      const ws = start.getTime() + i * 7 * 86400000
+      const we = ws + 6 * 86400000
+      return (we >= yStart && ws <= yEnd) ? lb : ''
+    })
+  }
   const cols = []
   for (let w = 0; w < nWeeks; w++) {
     const cells = []
