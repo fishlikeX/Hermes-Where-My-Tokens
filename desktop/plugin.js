@@ -18,12 +18,45 @@ import { createElement as h, useCallback, useEffect, useState } from 'react'
 
 const ID = 'where-my-tokens'
 const PATH = '/where-my-tokens'
-const MAXW_KEY = '***'
 const MAXW_DEFAULT = 880 // px; 0 in the control means "no cap, fill the pane"
-const YEAR_KEY = '***' // persisted heatmap view: null = recent, number = that year
+// The installed shell's ctx.storage behaves like ONE slot per plugin: after
+// the heatmap year was stored, the width input read "2026" back across a pane
+// switch (owner, 2026-10-15) — separate keys are NOT separate on that build.
+// So everything persists as ONE self-describing string under PREF_KEY. Values
+// the decoder doesn't recognize (bare numbers, junk from old builds sharing
+// the slot) degrade to defaults instead of leaking into a control.
+const PREF_KEY = '***'
+const PREFS_DEFAULT = { maxw: MAXW_DEFAULT, recent: true, year: null }
 // Second-tier memory: module scope survives Page remounts (pane switches)
 // even on shells without ctx.storage; hot-reload resets it, as it should.
-let cachedYear = null
+let cachedPrefs = null
+// encode/decode: "w=880" | "w=880;r=0;y=2026". decode validates every field.
+function encodePrefs(p) {
+  const bits = ['w=' + p.maxw]
+  if (!p.recent) bits.push('r=0')
+  if (p.year) bits.push('y=' + p.year)
+  return bits.join(';')
+}
+function decodePrefs(raw) {
+  if (typeof raw !== 'string' || !raw.startsWith('w=')) return null
+  const out = { maxw: -1, recent: true, year: null }
+  for (const bit of raw.split(';')) {
+    const v = bit.slice(2)
+    if (bit.slice(0, 2) === 'w=') {
+      const n = Number(v)
+      if (!Number.isFinite(n) || n < 0) return null
+      out.maxw = Math.min(n, 4000)
+    } else if (bit.slice(0, 2) === 'r=') out.recent = v !== '0'
+    else if (bit.slice(0, 2) === 'y=') {
+      const n = Number(v)
+      if (!Number.isInteger(n) || n < 2000 || n > 2100) return null
+      out.year = n
+    } else return null
+  }
+  if (out.maxw < 0) return null
+  if (!out.recent && !out.year) out.recent = true // year mode without a year decays to recent
+  return out
+}
 // 5 intensity levels. Paint strengths; bucketing itself is quantile-based
 // (see Heatmap). Bottom sits at 18% — on dark themes a fainter first tint
 // is indistinguishable from an empty cell (owner: "too unclear", 2026-10-15).
@@ -79,6 +112,9 @@ const BUNDLES = {
     maxWidthHint: 'max width (px) · 0 = fill',
     maxWidthLabel: 'width',
     recent: 'recent',
+    yearView: 'by year',
+    prevYear: 'previous year',
+    nextYear: 'next year',
     less: 'less',
     more: 'more',
     empty: 'no activity in range',
@@ -107,6 +143,9 @@ const BUNDLES = {
     maxWidthHint: '最大宽度(px) · 0=铺满',
     maxWidthLabel: '宽度',
     recent: '最近',
+    yearView: '按年',
+    prevYear: '上一年',
+    nextYear: '下一年',
     less: '少',
     more: '多',
     empty: '区间内无活动',
@@ -323,51 +362,69 @@ function Page({ ctx, tr, zh }) {
   const [data, setData] = useState(null)
   const [err, setErr] = useState(null)
   const [busy, setBusy] = useState(false)
-  // Year browser: null = rolling recent window; a number = that calendar year.
-  // Persisted in ctx.storage (capability-checked like ctx.i18n — an old shell
-  // without it just forgets on reload, never blanks the page), so switching
-  // panes and coming back keeps the chosen view (owner, 2026-10-15).
-  const [year, setYearState] = useState(() => {
-    const ok = (x) => x === null || (typeof x === 'number' && x >= 2000 && x <= 2100)
+  // ONE prefs object, one storage slot, string-encoded (see PREF_KEY note).
+  // `recent` = rolling window; year mode browses calendar years via arrows.
+  const [prefs, setPrefs] = useState(() => {
     try {
-      // distinguish "storage answered" (trust it, even null) from "no storage
-      // API" (fall back to the module-level cache of this session)
+      // "storage answered" (trust its decode, null = default) vs no API (module cache)
       if (ctx.storage && typeof ctx.storage.get === 'function') {
-        const v = ctx.storage.get(YEAR_KEY, null)
-        return ok(v) ? v : null
+        const v = decodePrefs(ctx.storage.get(PREF_KEY, ''))
+        return v || PREFS_DEFAULT
       }
     } catch (e) { /* fall through to cache */ }
-    return ok(cachedYear) ? cachedYear : null
+    return decodePrefs(cachedPrefs) || PREFS_DEFAULT
   })
-  const setYear = (v) => {
-    cachedYear = v
-    try { if (ctx.storage && ctx.storage.set) ctx.storage.set(YEAR_KEY, v) } catch (e) { /* session-only */ }
-    setYearState(v)
+  const savePrefs = (next) => {
+    cachedPrefs = encodePrefs(next)
+    try { if (ctx.storage && ctx.storage.set) ctx.storage.set(PREF_KEY, cachedPrefs) } catch (e) { /* session-only */ }
+    setPrefs(next)
+  }
+  const maxw = prefs.maxw
+  const yearModeOn = !prefs.recent
+  const liveYears = () => (years || []).map((y) => y.year) // backend: newest first
+  const saveMaxw = (next) => {
+    const v = Math.max(0, Math.min(Math.round(next) || 0, 4000))
+    savePrefs({ ...prefs, maxw: v })
+  }
+  const toggleRecent = () => {
+    if (yearModeOn) savePrefs({ ...prefs, recent: true })
+    else {
+      // entering year mode lands on the newest year with activity, else current
+      const ys = liveYears()
+      const y = ys.length ? ys[0] : new Date().getFullYear()
+      savePrefs({ ...prefs, recent: false, year: y })
+    }
+  }
+  // ‹ toward the past, › toward the future (calendar intuition, owner-vetoed
+  // GitHub's inverted mapping); walks only years with activity.
+  const stepYear = (dir) => {
+    const ys = liveYears() // newest first
+    if (!ys.length) return
+    let i = ys.indexOf(prefs.year)
+    if (i === -1) i = dir < 0 ? 0 : 0 // entering from an unknown year: snap to newest
+    else {
+      const n = i - dir // dir<0 (‹, past) => next older = index+1 in a newest-first list
+      if (n < 0 || n >= ys.length) return
+      i = n
+    }
+    savePrefs({ ...prefs, recent: false, year: ys[i] })
+  }
+  const canStep = (dir) => {
+    const ys = liveYears()
+    if (!ys.length || !yearModeOn) return false
+    const i = ys.indexOf(prefs.year)
+    if (i === -1) return true
+    return dir < 0 ? i + 1 < ys.length : i - 1 >= 0
   }
   // `years` (with activity) comes from /years on first load.
   const [years, setYears] = useState(null)
-  // Owner-tunable page width. ctx.storage may be absent on older desktop
-  // shells (same lesson as ctx.i18n — one missing API must never blank the
-  // page), so every access goes through this capability-checked pair; without
-  // storage the value simply lives for the session. 0 = no cap.
-  const [maxw, setMaxw] = useState(() => {
-    try {
-      const v = Number(ctx.storage && ctx.storage.get ? ctx.storage.get(MAXW_KEY, MAXW_DEFAULT) : MAXW_DEFAULT)
-      return Number.isFinite(v) && v >= 0 ? Math.min(v, 4000) : MAXW_DEFAULT
-    } catch (e) { return MAXW_DEFAULT }
-  })
-  const saveMaxw = (next) => {
-    const v = Math.max(0, Math.min(Math.round(next) || 0, 4000))
-    try { if (ctx.storage && ctx.storage.set) ctx.storage.set(MAXW_KEY, v) } catch (e) { /* session-only */ }
-    setMaxw(v)
-  }
 
   const load = useCallback(async () => {
     setBusy(true)
     try {
       const tz = -new Date().getTimezoneOffset() / 60
       const urls = [
-        ctx.rest(`/days?tz=${tz}&weeks=26${year ? `&year=${year}` : ''}`),
+        ctx.rest(`/days?tz=${tz}&weeks=26${!prefs.recent && prefs.year ? `&year=${prefs.year}` : ''}`),
         ctx.rest('/models?limit=5'),
       ]
       if (!years) urls.push(ctx.rest(`/years?tz=${tz}`))
@@ -381,35 +438,53 @@ function Page({ ctx, tr, zh }) {
     } finally {
       setBusy(false)
     }
-  }, [ctx, tr, year, years])
+  }, [ctx, tr, prefs, years])
 
   useEffect(() => { load() }, [load])
 
-  // Heatmap view switcher, explicit segmented control in the panel header:
-  // one button per year with activity, oldest→newest, "recent" at the right
-  // end (calendar order). No hidden gestures — everything discoverable at a
-  // glance (owner: "don't hide the switch inside clicking the year", 2026-10-15).
+  // Heatmap view switch, in the panel header: a two-state segment picks
+  // 最近 <-> 按年; the year itself walks with ‹ › (owner: one switch +
+  // arrows beats a button-per-year strip, 2026-10-15).
   const yearRow = () => {
-    const opts = (years || []).map((y) => y.year)
-    if (!opts.length) return null
-    const items = opts.slice().reverse().concat([null]) // oldest…newest, recent last
-    const seg = (v, active) =>
+    const seg = (on, label, onClick) =>
       h('span', {
-        key: v === null ? 'recent' : String(v),
-        onClick: active ? undefined : () => setYear(v),
+        onClick: on ? undefined : onClick,
         style: {
           padding: '2px 9px', fontSize: 11.5, userSelect: 'none',
-          cursor: active ? 'default' : 'pointer',
-          borderRadius: 6,
-          border: `1px solid ${active ? 'var(--ui-accent)' : 'var(--ui-stroke-secondary)'}`,
-          background: active ? 'var(--ui-accent)' : 'transparent',
-          color: active ? 'var(--ui-accent-invert, #fff)' : 'var(--ui-text-quaternary)',
-          fontWeight: active ? 700 : 400,
+          cursor: on ? 'default' : 'pointer',
+          border: `1px solid ${on ? 'var(--ui-accent)' : 'var(--ui-stroke-secondary)'}`,
+          background: on ? 'var(--ui-accent)' : 'transparent',
+          color: on ? 'var(--ui-accent-invert, #fff)' : 'var(--ui-text-quaternary)',
+          fontWeight: on ? 700 : 400,
         },
-      }, v === null ? tr('recent') : String(v))
+      }, label)
+    const arrow = (dir, glyph, label, enabled) =>
+      h('span', {
+        title: label,
+        onClick: enabled ? () => stepYear(dir) : undefined,
+        style: {
+          cursor: enabled ? 'pointer' : 'default', padding: '0 5px',
+          color: enabled ? 'var(--ui-accent)' : 'var(--ui-text-quaternary)',
+          opacity: enabled ? 1 : 0.35, userSelect: 'none', fontSize: 13,
+        },
+      }, glyph)
+    const yearsLive = liveYears()
+    const cur = prefs.year != null ? prefs.year : (yearsLive[0] ?? new Date().getFullYear())
     return h('span', {
-      style: { marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 4 },
-    }, ...items.map((v) => seg(v, (v === null ? year == null : year === v))))
+      style: { marginLeft: 'auto', display: 'inline-flex', alignItems: 'center',
+        gap: 4, border: '1px solid var(--ui-stroke-secondary)', borderRadius: 8,
+        padding: '2px 4px', userSelect: 'none' },
+    },
+      seg(!yearModeOn, tr('recent'), toggleRecent),
+      seg(yearModeOn, tr('yearView'), toggleRecent),
+      // arrows only in year mode; disabled at the ends of the live-year list
+      yearModeOn && yearsLive.length > 0 && h('span', {
+        style: { display: 'inline-flex', alignItems: 'center', marginLeft: 4 },
+      },
+        arrow(-1, '‹', tr('prevYear'), canStep(-1)),
+        h('span', { style: { minWidth: 38, textAlign: 'center', fontWeight: 600,
+          color: 'var(--ui-text-secondary)', fontSize: 12 } }, String(cur)),
+        arrow(1, '›', tr('nextYear'), canStep(1))))
   }
 
   if (err && !data) {
@@ -470,7 +545,7 @@ function Page({ ctx, tr, zh }) {
       h(Card, { value: `${t.longest_session_hours} ${tr('hrs')}`, label: tr('longest') })),
 
     h(Panel, { title: tr('heatmapTitle'), zh, extra: yearRow },
-      h(Heatmap, { days: data.days, weeks: 26, year: data.year || year, zh, tr })),
+      h(Heatmap, { days: data.days, weeks: 26, year: data.year || (!prefs.recent ? prefs.year : null), zh, tr })),
     h(Panel, { title: tr('trendTitle'), zh }, h(Trend, { days: data.days, zh })),
     h(Panel, { title: tr('modelsTitle'), zh }, h(ModelBars, { models: data.models, zh })))
 }
