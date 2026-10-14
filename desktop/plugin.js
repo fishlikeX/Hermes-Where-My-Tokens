@@ -75,6 +75,7 @@ const BUNDLES = {
     maxWidthHint: 'max width (px) · 0 = fill',
     maxWidthLabel: 'width',
     recent: 'recent',
+    yearFull: 'full year {y}',
     prevYear: 'previous year',
     nextYear: 'next year',
     less: 'less',
@@ -105,6 +106,7 @@ const BUNDLES = {
     maxWidthHint: '最大宽度(px) · 0=铺满',
     maxWidthLabel: '宽度',
     recent: '最近',
+    yearFull: '{y} 全年',
     prevYear: '上一年',
     nextYear: '下一年',
     less: '少',
@@ -161,7 +163,9 @@ const Panel = ({ title, zh, extra, children }) => {
 // strictly increase left→right (proof: within a month the column index grows
 // by exactly 1 per week). First-month labels are suppressed unless the month
 // starts inside the window (that is what "January has data" means).
-function monthLabels(start, end) {
+// Labels are locale-shaped by the caller: 中文 "10月" / GitHub-style "Oct".
+const MONTHS_EN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+function monthLabels(start, end, fmtMonth) {
   const out = {}
   const day = new Date(start)
   while (day <= end) {
@@ -183,14 +187,13 @@ function monthLabels(start, end) {
   let i = 0
   for (const item of uniq) {
     while (i < item.col) { out[i++] = '' }
-    if (i < spans) out[i++] = item.m + 1
+    if (i < spans) out[i++] = fmtMonth(item.m)
   }
   const arr = []
   for (let c = 0; c < spans; c++) arr.push(out[c] || '')
   return arr
 }
-
-function Heatmap({ days, weeks, year, tr }) {
+function Heatmap({ days, weeks, year, zh, tr }) {
   // Grid of calendar columns (Mon-aligned), cells = weekday rows. Cells
   // stretch to the container (GitHub-style square stretch).
   //
@@ -220,7 +223,7 @@ function Heatmap({ days, weeks, year, tr }) {
     end = new Date(Math.min(today.getTime(), start.getTime() + 7 * (weeks - 1) * 86400000 + 6 * 86400000))
     nWeeks = weeks
   }
-  const labels = monthLabels(start, end)
+  const labels = monthLabels(start, end, zh ? (m) => (m + 1) + '月' : (m) => MONTHS_EN[m])
   const cols = []
   for (let w = 0; w < nWeeks; w++) {
     const cells = []
@@ -283,11 +286,16 @@ function Trend({ days, zh }) {
             height: `${Math.max(2, (d.tokens / mx) * 100)}%` },
           tint(62)),
       }))),
-    // Hermes usage-page style: only the ends of the axis carry dates
+    // Hermes usage-page style: only the ends of the axis carry dates.
+    // nowrap+no-shrink on both ends: when the pane is narrow they must
+    // truncate apart, never wrap inward and smear into each other (owner,
+    // 2026-10-15: first/last dates rendered "glued together").
     h('div', {
-      style: { display: 'flex', justifyContent: 'space-between', marginTop: 5,
+      style: { display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 5,
         fontSize: 10, color: 'var(--ui-text-quaternary)', userSelect: 'none' },
-    }, md(last[0].date), md(last[last.length - 1].date)))
+    },
+      h('span', { style: { whiteSpace: 'nowrap', flexShrink: 0 } }, md(last[0].date)),
+      h('span', { style: { whiteSpace: 'nowrap', flexShrink: 0 } }, md(last[last.length - 1].date))))
 }
 
 function ModelBars({ models, zh }) {
@@ -366,14 +374,17 @@ function Page({ ctx, tr, zh }) {
     const opts = (years || []).map((y) => y.year)
     const cur = year || 'recent'
     if (opts.length < 2) {
-      // single-year ledger: still show the year label (top-right), clickable
-      // to pull that full calendar year; no arrows to walk to.
+      // single-year ledger: the label toggles between the rolling window and
+      // the full calendar year — that's also the fix for "can't show the whole
+      // year in one board" (owner, 2026-10-15): 2026 view draws 53 columns.
+      const showFull = () => setYear(opts[0])
+      const fullLabel = () => tr('yearFull').replace('{y}', String(opts[0]))
       return h('span', {
-        title: tr('recent'),
-        onClick: () => setYear(null),
+        title: cur === 'recent' ? fullLabel() : tr('recent'),
+        onClick: () => (year == null ? showFull() : setYear(null)),
         style: { marginLeft: 'auto', fontSize: 12, fontWeight: 600,
           color: 'var(--ui-text-secondary)', cursor: 'pointer' },
-      }, cur === 'recent' ? String(new Date().getFullYear()) : String(cur))
+      }, cur === 'recent' ? String(opts[0]) : String(cur))
     }
     // nav list runs OLDEST → NEWEST with "recent" parked at the right end
     // (calendar intuition: ‹ steps back into the past, › steps to the future;
@@ -469,7 +480,7 @@ function Page({ ctx, tr, zh }) {
       h(Card, { value: `${t.longest_session_hours} ${tr('hrs')}`, label: tr('longest') })),
 
     h(Panel, { title: tr('heatmapTitle'), zh, extra: yearRow },
-      h(Heatmap, { days: data.days, weeks: 26, year: data.year || year, tr })),
+      h(Heatmap, { days: data.days, weeks: 26, year: data.year || year, zh, tr })),
     h(Panel, { title: tr('trendTitle'), zh }, h(Trend, { days: data.days, zh })),
     h(Panel, { title: tr('modelsTitle'), zh }, h(ModelBars, { models: data.models, zh })))
 }
