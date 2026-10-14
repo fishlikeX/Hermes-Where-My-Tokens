@@ -99,7 +99,7 @@ const BUNDLES = {
     calls: 'API calls',
     sessions: 'sessions',
     streak: 'active streak',
-    bestStreak: 'best streak',
+    bestStreak: 'longest active streak',
     peak: 'peak day',
     longest: 'longest session',
     heatmapTitle: 'Token activity',
@@ -130,7 +130,7 @@ const BUNDLES = {
     calls: 'API 调用',
     sessions: '会话',
     streak: '连续活跃',
-    bestStreak: '最长连续',
+    bestStreak: '最长连续活跃',
     peak: '峰值日',
     longest: '最长会话',
     heatmapTitle: '词元活动热力图',
@@ -450,8 +450,9 @@ function Page({ ctx, tr, zh }) {
       h('span', {
         onClick: on ? undefined : onClick,
         style: {
-          padding: '2px 9px', fontSize: 11.5, userSelect: 'none',
+          padding: '2px 11px', fontSize: 11.5, userSelect: 'none',
           cursor: on ? 'default' : 'pointer',
+          borderRadius: 999, // pill — owner: sharp rectangles read unfinished
           border: `1px solid ${on ? 'var(--ui-accent)' : 'var(--ui-stroke-secondary)'}`,
           background: on ? 'var(--ui-accent)' : 'transparent',
           color: on ? 'var(--ui-accent-invert, #fff)' : 'var(--ui-text-quaternary)',
