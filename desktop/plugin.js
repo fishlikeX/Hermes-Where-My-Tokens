@@ -20,6 +20,10 @@ const ID = 'where-my-tokens'
 const PATH = '/where-my-tokens'
 const MAXW_KEY = '***'
 const MAXW_DEFAULT = 880 // px; 0 in the control means "no cap, fill the pane"
+const YEAR_KEY = '***' // persisted heatmap view: null = recent, number = that year
+// Second-tier memory: module scope survives Page remounts (pane switches)
+// even on shells without ctx.storage; hot-reload resets it, as it should.
+let cachedYear = null
 // 5 intensity levels. Paint strengths; bucketing itself is quantile-based
 // (see Heatmap). Bottom sits at 18% — on dark themes a fainter first tint
 // is indistinguishable from an empty cell (owner: "too unclear", 2026-10-15).
@@ -75,9 +79,6 @@ const BUNDLES = {
     maxWidthHint: 'max width (px) · 0 = fill',
     maxWidthLabel: 'width',
     recent: 'recent',
-    yearFull: 'full year {y}',
-    prevYear: 'previous year',
-    nextYear: 'next year',
     less: 'less',
     more: 'more',
     empty: 'no activity in range',
@@ -106,9 +107,6 @@ const BUNDLES = {
     maxWidthHint: '最大宽度(px) · 0=铺满',
     maxWidthLabel: '宽度',
     recent: '最近',
-    yearFull: '{y} 全年',
-    prevYear: '上一年',
-    nextYear: '下一年',
     less: '少',
     more: '多',
     empty: '区间内无活动',
@@ -326,8 +324,27 @@ function Page({ ctx, tr, zh }) {
   const [err, setErr] = useState(null)
   const [busy, setBusy] = useState(false)
   // Year browser: null = rolling recent window; a number = that calendar year.
+  // Persisted in ctx.storage (capability-checked like ctx.i18n — an old shell
+  // without it just forgets on reload, never blanks the page), so switching
+  // panes and coming back keeps the chosen view (owner, 2026-10-15).
+  const [year, setYearState] = useState(() => {
+    const ok = (x) => x === null || (typeof x === 'number' && x >= 2000 && x <= 2100)
+    try {
+      // distinguish "storage answered" (trust it, even null) from "no storage
+      // API" (fall back to the module-level cache of this session)
+      if (ctx.storage && typeof ctx.storage.get === 'function') {
+        const v = ctx.storage.get(YEAR_KEY, null)
+        return ok(v) ? v : null
+      }
+    } catch (e) { /* fall through to cache */ }
+    return ok(cachedYear) ? cachedYear : null
+  })
+  const setYear = (v) => {
+    cachedYear = v
+    try { if (ctx.storage && ctx.storage.set) ctx.storage.set(YEAR_KEY, v) } catch (e) { /* session-only */ }
+    setYearState(v)
+  }
   // `years` (with activity) comes from /years on first load.
-  const [year, setYear] = useState(null)
   const [years, setYears] = useState(null)
   // Owner-tunable page width. ctx.storage may be absent on older desktop
   // shells (same lesson as ctx.i18n — one missing API must never blank the
@@ -368,58 +385,31 @@ function Page({ ctx, tr, zh }) {
 
   useEffect(() => { load() }, [load])
 
-  // Year navigator lives in the heatmap panel title, GitHub-style: a year
-  // label flanked by ‹ › that only walks across years that have activity.
+  // Heatmap view switcher, explicit segmented control in the panel header:
+  // one button per year with activity, oldest→newest, "recent" at the right
+  // end (calendar order). No hidden gestures — everything discoverable at a
+  // glance (owner: "don't hide the switch inside clicking the year", 2026-10-15).
   const yearRow = () => {
     const opts = (years || []).map((y) => y.year)
-    const cur = year || 'recent'
-    if (opts.length < 2) {
-      // single-year ledger: the label toggles between the rolling window and
-      // the full calendar year — that's also the fix for "can't show the whole
-      // year in one board" (owner, 2026-10-15): 2026 view draws 53 columns.
-      const showFull = () => setYear(opts[0])
-      const fullLabel = () => tr('yearFull').replace('{y}', String(opts[0]))
-      return h('span', {
-        title: cur === 'recent' ? fullLabel() : tr('recent'),
-        onClick: () => (year == null ? showFull() : setYear(null)),
-        style: { marginLeft: 'auto', fontSize: 12, fontWeight: 600,
-          color: 'var(--ui-text-secondary)', cursor: 'pointer' },
-      }, cur === 'recent' ? String(opts[0]) : String(cur))
-    }
-    // nav list runs OLDEST → NEWEST with "recent" parked at the right end
-    // (calendar intuition: ‹ steps back into the past, › steps to the future;
-    // owner vetoed the GitHub-style inverted mapping, 2026-10-15).
-    const nav = opts.slice().reverse().concat([null])
-    const step = (dir) => {
-      const i = nav.indexOf(year)
-      const next = nav[Math.max(0, Math.min(nav.length - 1, i + dir))]
-      setYear(next === null ? null : Number(next))
-    }
-    const arrow = (dir, glyph, label, disabled) =>
+    if (!opts.length) return null
+    const items = opts.slice().reverse().concat([null]) // oldest…newest, recent last
+    const seg = (v, active) =>
       h('span', {
-        title: label,
-        onClick: disabled ? undefined : () => step(dir),
+        key: v === null ? 'recent' : String(v),
+        onClick: active ? undefined : () => setYear(v),
         style: {
-          cursor: disabled ? 'default' : 'pointer', padding: '0 6px',
-          color: disabled ? 'var(--ui-text-quaternary)' : 'var(--ui-accent)',
-          opacity: disabled ? 0.35 : 1, userSelect: 'none', fontSize: 13,
+          padding: '2px 9px', fontSize: 11.5, userSelect: 'none',
+          cursor: active ? 'default' : 'pointer',
+          borderRadius: 6,
+          border: `1px solid ${active ? 'var(--ui-accent)' : 'var(--ui-stroke-secondary)'}`,
+          background: active ? 'var(--ui-accent)' : 'transparent',
+          color: active ? 'var(--ui-accent-invert, #fff)' : 'var(--ui-text-quaternary)',
+          fontWeight: active ? 700 : 400,
         },
-      }, glyph)
-    // opts is newest-first: oldest live year is its LAST element; "recent"
-    // (year === null) is the right end of the nav list.
-    const atRecent = year === null || year === undefined
-    const atOldest = opts.length > 0 && year === opts[opts.length - 1]
+      }, v === null ? tr('recent') : String(v))
     return h('span', {
-      style: { marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 2, fontSize: 12 },
-    },
-      // nav is oldest→newest: ‹ (dir -1) steps toward the past, › (+1) toward
-      // the future, where "recent" sits past the newest year at the right end.
-      arrow(-1, '‹', tr('prevYear'), atOldest),
-      h('span', {
-        onClick: () => setYear(null),
-        style: { cursor: 'pointer', color: 'var(--ui-text-secondary)', minWidth: 46, textAlign: 'center', fontWeight: 600 },
-      }, cur === 'recent' ? tr('recent') : String(cur)),
-      arrow(1, '›', tr('nextYear'), atRecent))
+      style: { marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 4 },
+    }, ...items.map((v) => seg(v, (v === null ? year == null : year === v))))
   }
 
   if (err && !data) {
