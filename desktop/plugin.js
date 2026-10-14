@@ -442,6 +442,35 @@ function Page({ ctx, tr, zh }) {
 
   useEffect(() => { load() }, [load])
 
+  // Hourly auto-refresh on the wall-clock hour, only while this page is the
+  // visible tab (owner request, 2026-10-15). Measured cost: the three REST
+  // calls total ~23ms of read-only local SQLite — negligible. A 1-minute
+  // cadence was rejected: same negligible server cost, but the full
+  // re-render would visibly interrupt reading/tooltip hovers every minute,
+  // and usage data that churns per-minute is below this ledger's grain
+  // (day/week/streak views).
+  useEffect(() => {
+    let timer = null
+    const arm = () => {
+      const now = new Date()
+      const msNextHour = 3600000 - ((now.getMinutes() * 60 + now.getSeconds()) * 1000 + now.getMilliseconds())
+      timer = setTimeout(() => {
+        if (!document.hidden) load()
+        arm()
+      }, msNextHour)
+    }
+    const onVisible = () => {
+      // back from a long hidden stretch: stale-while-hidden, refresh once on return
+      if (!document.hidden) load()
+    }
+    arm()
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      if (timer) clearTimeout(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [load])
+
   // Heatmap view switch, in the panel header: a two-state segment picks
   // 最近 <-> 按年; the year itself walks with ‹ › (owner: one switch +
   // arrows beats a button-per-year strip, 2026-10-15).
