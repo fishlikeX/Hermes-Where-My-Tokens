@@ -587,7 +587,7 @@ export default {
       })()
       ctx.registerMany([
         { id: 'page', area: ROUTES_AREA, data: { path: PATH }, render: () => h(Page, { ctx, tr, zh }) },
-        { id: 'nav', area: SIDEBAR_NAV_AREA, data: { path: PATH, label: tr('nav'), codicon: 'gist-history' } },
+        { id: 'nav', area: SIDEBAR_NAV_AREA, data: { path: PATH, label: tr('nav'), codicon: 'credit-card' } },
         { id: 'open', area: PALETTE_AREA, data: { id: 'where-my-tokens.open', title: tr('nav'), run: () => host.navigate(PATH) } },
       ])
     }
