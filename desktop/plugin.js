@@ -450,9 +450,9 @@ function Page({ ctx, tr, zh }) {
       h('span', {
         onClick: on ? undefined : onClick,
         style: {
-          padding: '2px 11px', fontSize: 11.5, userSelect: 'none',
+          padding: '2px 9px', fontSize: 11.5, userSelect: 'none',
           cursor: on ? 'default' : 'pointer',
-          borderRadius: 999, // pill — owner: sharp rectangles read unfinished
+          borderRadius: 6, // same radius as the header's other controls (owner: 999-pill too round next to them)
           border: `1px solid ${on ? 'var(--ui-accent)' : 'var(--ui-stroke-secondary)'}`,
           background: on ? 'var(--ui-accent)' : 'transparent',
           color: on ? 'var(--ui-accent-invert, #fff)' : 'var(--ui-text-quaternary)',
