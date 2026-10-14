@@ -375,10 +375,10 @@ function Page({ ctx, tr, zh }) {
           color: 'var(--ui-text-secondary)', cursor: 'pointer' },
       }, cur === 'recent' ? String(new Date().getFullYear()) : String(cur))
     }
-    // nav list: [null(=recent), newest … oldest]; ‹ = one to the NEWER side,
-    // › = one to the OLDER side (list is newest-first, so dir maps straight
-    // to the index shift).
-    const nav = [null].concat(opts)
+    // nav list runs OLDEST → NEWEST with "recent" parked at the right end
+    // (calendar intuition: ‹ steps back into the past, › steps to the future;
+    // owner vetoed the GitHub-style inverted mapping, 2026-10-15).
+    const nav = opts.slice().reverse().concat([null])
     const step = (dir) => {
       const i = nav.indexOf(year)
       const next = nav[Math.max(0, Math.min(nav.length - 1, i + dir))]
@@ -394,17 +394,21 @@ function Page({ ctx, tr, zh }) {
           opacity: disabled ? 0.35 : 1, userSelect: 'none', fontSize: 13,
         },
       }, glyph)
-    const atNewest = year === null || year === undefined
-    const atOldest = opts.length && year === opts[opts.length - 1]
+    // opts is newest-first: oldest live year is its LAST element; "recent"
+    // (year === null) is the right end of the nav list.
+    const atRecent = year === null || year === undefined
+    const atOldest = opts.length > 0 && year === opts[opts.length - 1]
     return h('span', {
       style: { marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 2, fontSize: 12 },
     },
-      arrow(-1, '‹', tr('prevYear'), atNewest),
+      // nav is oldest→newest: ‹ (dir -1) steps toward the past, › (+1) toward
+      // the future, where "recent" sits past the newest year at the right end.
+      arrow(-1, '‹', tr('prevYear'), atOldest),
       h('span', {
         onClick: () => setYear(null),
         style: { cursor: 'pointer', color: 'var(--ui-text-secondary)', minWidth: 46, textAlign: 'center', fontWeight: 600 },
       }, cur === 'recent' ? tr('recent') : String(cur)),
-      arrow(1, '›', tr('nextYear'), atOldest))
+      arrow(1, '›', tr('nextYear'), atRecent))
   }
 
   if (err && !data) {
